@@ -1,12 +1,11 @@
 #pragma once
 
 // * needed structures
-#include <vector>
 #include <string>
 #include <set>
+#include <map>
 #include <stack>
 #include <complex>
-#include <numeric>
 #include <algorithm>
 
 // * debugging
@@ -142,7 +141,7 @@ namespace calc
         const bool operator<(const term &other) const;
         const bool operator==(const term &other) const;
 
-        expressionNode *conj() const;
+        virtual expressionNode *conj() const = 0;
     };
 
     class basicTerm : public term
@@ -150,12 +149,19 @@ namespace calc
     public:
         expressionNode *conj() const;
 
-    private:
+        basicTerm(const std::string _name)
+            : term(_name) {}
+
         struct termProperties
         {
             bool isReal;
             bool isUnit;
         };
+
+        basicTerm(const std::string _name, termProperties _props)
+            : term(_name), props(_props) {}
+
+    private:
         const termProperties props = {false, false};
     };
 
@@ -179,20 +185,28 @@ namespace calc
         {
             coef = _coef;
         }
-        std::multiset<term> product = std::multiset<term>();
+        std::multimap<std::string, term *> product;
         monomial() {}
-        monomial(constTy _coef, const term &_term)
+        monomial(constTy _coef, term *_term)
             : coef(_coef)
         {
-            product.insert(_term);
+            product.insert({_term->name, _term});
         }
-        monomial(const constTy _coef, std::multiset<term> _product)
+        monomial(const constTy _coef, std::multimap<std::string, term *> _product)
             : coef(_coef), product(_product)
         {
         }
 
-        bool operator<(const monomial &other) const { return product < other.product; }
-        bool operator==(const monomial &other) const { return product == other.product; }
+        bool operator<(const monomial &other) const
+        {
+            return std::lexicographical_compare(product.begin(), product.end(), other.product.begin(), other.product.end(), [](auto a, auto b)
+                                                { return a.first < b.first; });
+        }
+        bool operator==(const monomial &other) const
+        {
+            return std::equal(product.begin(), product.end(), other.product.begin(), other.product.end(), [](auto a, auto b)
+                              { return a.first == b.first; });
+        }
 
         expressionNode *conj() const;
 
@@ -288,5 +302,7 @@ namespace calc
     };
 
     polyNode *make_term(std::string name);
+    polyNode *make_unit_term(std::string name);
+    polyNode *make_real_term(std::string name);
     polyNode *make_scalar(constTy scalar);
 }

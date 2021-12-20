@@ -224,28 +224,24 @@ const bool term::operator==(const term &other) const
 expressionNode *basicTerm::conj() const
 {
     if (props.isReal)
-    {
-        return new polyNode(monomial(1, *this));
-    }
+        return new polyNode(monomial(1, new basicTerm(*this)));
     if (props.isUnit)
-    {
-        return make_scalar(1)->divide(new polyNode(monomial(1, *this)));
-    }
-    basicTerm conjugated(*this);
-    conjugated.invertMark();
+        return make_scalar(1)->divide(new polyNode(monomial(1, new basicTerm(*this))));
+    basicTerm *conjugated = new basicTerm(*this);
+    conjugated->invertMark();
     return new polyNode(monomial(1, conjugated));
 }
 
 expressionNode *quasiTerm::conj() const
 {
-    return new polyNode(monomial(1, quasiTerm(name, hiddenExpression->conj())));
+    return new polyNode(monomial(1, new quasiTerm(name, hiddenExpression->conj())));
 }
 
 expressionNode *monomial::conj() const
 {
     expressionNode *result = make_scalar(coef);
-    for (term _term : product)
-        result->multiply(_term.conj());
+    for (auto [name, pointer] : product)
+        result = result->multiply(pointer->conj());
     return result;
 }
 
@@ -267,7 +263,7 @@ expressionNode *polyNode::conj() const
 {
     expressionNode *result = new polyNode();
     for (monomial mono : sum)
-        result->add(mono.conj());
+        result = result->add(mono.conj());
     return result;
 }
 
@@ -347,14 +343,24 @@ expressionNode *polyNode::divide(operationNode *secondOp, const bool isDivident)
 
 polyNode *calc::make_term(std::string name)
 {
-    return new polyNode(monomial(1, term(name)));
+    return new polyNode(monomial(1, new basicTerm(name)));
+}
+
+polyNode *calc::make_unit_term(std::string name)
+{
+    return new polyNode(monomial(1, new basicTerm(name, {false, true})));
+}
+
+polyNode *calc::make_real_term(std::string name)
+{
+    return new polyNode(monomial(1, new basicTerm(name, {true, false})));
 }
 
 polyNode *calc::make_scalar(constTy scalar)
 {
     if (scalar == 0)
         return new polyNode();
-    return new polyNode(monomial(scalar, std::multiset<term>()));
+    return new polyNode(monomial(scalar, std::multimap<std::string, term *>()));
 }
 
 void operationNode::print() const
@@ -418,31 +424,112 @@ void polyNode::print() const
             if ((mono.product.empty()) || (coef.real() != 1) && (coef.real() != -1))
                 std::cout << std::abs(coef.real());
         }
-        for (auto it = mono.product.begin(); it != mono.product.end();)
+        for (auto jt = mono.product.begin(); jt != mono.product.end();)
         {
-            term current = *it;
+            std::string current = jt->first;
             int deg = mono.product.count(current);
-            std::cout << current.name;
-            if (current.hasConjugationMark)
+            std::cout << current;
+            if (jt->second->hasConjugationMark)
                 std::cout << '~';
             if (deg != 1)
             {
                 std::cout << "^";
                 std::cout << deg;
             }
-            std::advance(it, deg);
+            std::advance(jt, deg);
         }
     }
 }
 
+expressionNode *parseString(const std::string &line, size_t l, size_t r)
+{
+    while (l < r && line[l] == ' ')
+        ++l;
+    while (r > l && line[r - 1] == ' ')
+        --r;
+    if (r <= l)
+        return make_scalar(1);
+    unsigned counter = 0;
+    size_t curr = l;
+    size_t m, d, s;
+    m = r;
+    d = r;
+    s = r;
+    while (curr != r)
+    {
+        if (line[curr] == '(')
+        {
+            ++counter;
+            ++curr;
+            continue;
+        }
+        if (line[curr] == ')')
+        {
+            --counter;
+            ++curr;
+            continue;
+        }
+        if (counter == 0)
+        {
+            if (line[curr] == '+')
+                return parseString(line, l, curr)->add(parseString(line, curr + 1, r));
+            if (line[curr] == '-')
+                s = curr;
+            if (line[curr] == '*')
+            {
+                m = curr++;
+                continue;
+            }
+            if (line[curr] == '/')
+            {
+                d = curr++;
+                continue;
+            }
+        }
+        ++curr;
+    }
+    if (s != r && s != l)
+        return parseString(line, l, s)->substract(parseString(line, s + 1, r));
+    if (m != r)
+        return parseString(line, l, m)->multiply(parseString(line, m + 1, r));
+    if (d != r)
+        return parseString(line, l, d)->divide(parseString(line, d + 1, r));
+    if (line[l] == '(')
+    {
+        counter = 1;
+        size_t closing = l + 1;
+        while (closing < r)
+        {
+            if (line[closing] == '(')
+                ++counter;
+            if (line[closing] == ')')
+                --counter;
+            if (counter == 0)
+                return parseString(line, l + 1, closing)->multiply(parseString(line, closing + 1, r));
+            ++closing;
+        }
+    }
+    if (l == r)
+        return make_scalar(1);
+    if (line[l] == '-')
+        return parseString(line, l + 1, r)->negate();
+    if (line[l] >= 48 && line[l] <= 57)
+    {
+        size_t numEnd = l + 1;
+        while (numEnd < r && (line[numEnd] >= 48) && (line[numEnd] <= 57))
+            ++numEnd;
+        return make_scalar(std::stoi(line.substr(l, numEnd - l)))->multiply(parseString(line, numEnd, r));
+    }
+    return make_unit_term(line.substr(l, 1))->multiply(parseString(line, l + 1, r));
+}
+
 int main()
 {
-    polyNode *a = make_term("a");
-    polyNode *b = make_term("b");
-    polyNode *c = make_term("c");
-    polyNode *two = make_scalar(2);
-    expressionNode *result = two->multiply(a)->multiply(b)->divide(a->add(b));
-    result->print();
-    std::getchar();
+    std::string s;
+    std::getline(std::cin, s);
+    auto result = parseString(s, 0, s.size());
+    result->expand()->print();
+    std::cout << std::endl;
+    result->conj()->expand()->print();
     return 0;
 }
