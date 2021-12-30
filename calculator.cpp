@@ -14,7 +14,7 @@ expressionNode *operationNode::add(expressionNode *second) const
 
 expressionNode *operationNode::add(polyNode *secondPoly) const
 {
-    if (secondPoly->zeroEqualityCheck())
+    if (secondPoly->checkZeroEquality())
         return const_cast<operationNode *>(this);
     if (operation != operationType::ADDITION)
         return new operationNode(secondPoly, const_cast<operationNode *>(this), operationType::ADDITION);
@@ -50,7 +50,7 @@ expressionNode *operationNode::multiply(constTy coef) const
 
 expressionNode *operationNode::multiply(polyNode *secondPoly) const
 {
-    if (secondPoly->zeroEqualityCheck())
+    if (secondPoly->checkZeroEquality())
         return new polyNode();
     if (operation == operationType::MULTIPLICATION)
         return (secondPoly->multiply(left))->multiply(right);
@@ -105,6 +105,8 @@ expressionNode *operationNode::divide(polyNode *secondPoly, const bool isDividen
     }
     else
     {
+        if (secondPoly->checkZeroEquality())
+            return new polyNode();
         if (operation == operationType::DIVISION)
         {
             expressionNode *nominator = secondPoly->multiply(right);
@@ -239,24 +241,87 @@ expressionNode *quasiTerm::conj() const
 
 expressionNode *monomial::conj() const
 {
-    expressionNode *result = make_scalar(coef);
-    for (auto [name, pointer] : product)
-        result = result->multiply(pointer->conj());
+    expressionNode *result = make_scalar(std::conj(coef));
+    for (auto const &[name, degree] : product)
+    {
+        expressionNode *conj_term = degree.first->conj();
+        for (int i = 0; i < degree.second; ++i)
+            result = result->multiply(conj_term);
+    }
     return result;
+}
+
+const bool monomial::operator<(const monomial &other) const
+{
+    auto jt = other.product.begin();
+    for (auto it = product.begin(); it != product.end(); ++it)
+    {
+        if (jt == other.product.end())
+            return false;
+        if (it->first != jt->first)
+            return it->first < jt->first;
+        if (it->second.second < jt->second.second)
+            return (it == std::prev(product.end()));
+        if (jt->second.second < it->second.second)
+            return (jt != std::prev(other.product.end()));
+        ++jt;
+    }
+    if (jt != other.product.end())
+        return true;
+    return false;
+}
+
+const bool monomial::operator==(const monomial &other) const
+{
+    return std::equal(product.begin(), product.end(), other.product.begin(), other.product.end(),
+                      [](const auto &a, const auto &b)
+                      { return std::make_pair(a.first, a.second.second) == std::make_pair(b.first, b.second.second); });
 }
 
 monomial monomial::operator*(const monomial &other) const
 {
     monomial result = *this;
     result.coef = this->coef * other.coef;
-    for (const auto &multiply : other.product)
-        result.product.insert(multiply);
+    for (const auto &[name, degree] : other.product)
+    {
+        auto it = result.product.find(name);
+        if (it != result.product.end())
+            it->second.second += degree.second;
+        else
+            result.product.insert({name, {degree.first, degree.second}});
+    }
     return result;
 }
 
 void monomial::operator*=(const constTy k) const
 {
     resetCoef(coef * k);
+}
+
+const bool monomial::dividedBy(const monomial &divider) const
+{
+    for (auto const &[name, degree] : divider.product)
+    {
+        auto it = product.find(name);
+        if (it == product.end() || it->second.second < degree.second)
+            return false;
+    }
+    return true;
+}
+
+monomial monomial::divide(const monomial &divider) const
+{
+    if (divider.product.empty())
+        return *this;
+    monomial result = *this;
+    for (auto const &[name, degree] : divider.product)
+    {
+        auto it = result.product.find(name);
+        it->second.second -= degree.second;
+        if (it->second.second == 0)
+            result.product.erase(it);
+    }
+    return result;
 }
 
 expressionNode *polyNode::conj() const
@@ -294,9 +359,7 @@ polyNode polyNode::operator*(const monomial &other) const
 {
     polyNode result;
     for (const auto &mono : sum)
-    {
         result += mono * other;
-    }
     return result;
 }
 
@@ -323,22 +386,58 @@ polyNode polyNode::operator-(const polyNode &other) const
 
 expressionNode *polyNode::divide(polyNode *secondPoly, const bool isDivident) const
 {
-    // TODO: gcd cancelling (unreal) (maybe very slow)
     if (isDivident)
     {
-        if (zeroEqualityCheck())
+        if (sum.empty())
             return new polyNode();
+        if (secondPoly->sum.size() == 1)
+        {
+            monomial divider = *secondPoly->sum.begin();
+            if (!divider.product.empty() && dividedBy(divider))
+                return divide(divider);
+            if (divider.product.empty() && (divider.coef == 1))
+                return const_cast<polyNode *>(this);
+            if (divider.product.empty() && (divider.coef == -1))
+                return negate();
+        }
+        if (sum.size() == 1)
+        {
+            monomial divider = *sum.begin();
+            if (divider.product.size() && secondPoly->dividedBy(divider))
+                return make_scalar(1)->divide(secondPoly->divide(divider));
+        }
         return new operationNode(const_cast<polyNode *>(this), secondPoly, operationNode::operationType::DIVISION);
     }
     else
-    {
         return secondPoly->divide(const_cast<polyNode *>(this));
-    }
 }
 
 expressionNode *polyNode::divide(operationNode *secondOp, const bool isDivident) const
 {
     return secondOp->divide(const_cast<polyNode *>(this), !isDivident);
+}
+
+const bool polyNode::dividedBy(const monomial &divider) const
+{
+    for (auto mono : sum)
+    {
+        if (!mono.dividedBy(divider))
+            return false;
+    }
+    return true;
+}
+
+expressionNode *polyNode::divide(const monomial &divider) const
+{
+    expressionNode *result = new polyNode();
+    for (auto mono : sum)
+        result = result->add(new polyNode(mono.divide(divider)));
+    if (divider.coef != 1 && divider.coef != -1)
+        return result->divide(make_scalar(divider.coef));
+    else if (divider.coef == -1)
+        return result->negate();
+    else
+        return result;
 }
 
 polyNode *calc::make_term(std::string name)
@@ -360,7 +459,7 @@ polyNode *calc::make_scalar(constTy scalar)
 {
     if (scalar == 0)
         return new polyNode();
-    return new polyNode(monomial(scalar, std::multimap<std::string, term *>()));
+    return new polyNode(monomial(scalar, std::map<std::string, std::pair<term *, int>>()));
 }
 
 void operationNode::print() const
@@ -420,24 +519,16 @@ void polyNode::print() const
                     std::cout << " + ";
             }
             else
-                std::cout << " - ";
+            {
+                if (it != sum.begin())
+                    std::cout << " ";
+                std::cout << "- ";
+            }
             if ((mono.product.empty()) || (coef.real() != 1) && (coef.real() != -1))
                 std::cout << std::abs(coef.real());
         }
-        for (auto jt = mono.product.begin(); jt != mono.product.end();)
-        {
-            std::string current = jt->first;
-            int deg = mono.product.count(current);
-            std::cout << current;
-            if (jt->second->hasConjugationMark)
-                std::cout << '~';
-            if (deg != 1)
-            {
-                std::cout << "^";
-                std::cout << deg;
-            }
-            std::advance(jt, deg);
-        }
+        for (auto [name, degree] : mono.product)
+            std::cout << name << (degree.second > 1 ? "^" + std::to_string(degree.second) : "");
     }
 }
 
@@ -521,15 +612,4 @@ expressionNode *parseString(const std::string &line, size_t l, size_t r)
         return make_scalar(std::stoi(line.substr(l, numEnd - l)))->multiply(parseString(line, numEnd, r));
     }
     return make_unit_term(line.substr(l, 1))->multiply(parseString(line, l + 1, r));
-}
-
-int main()
-{
-    std::string s;
-    std::getline(std::cin, s);
-    auto result = parseString(s, 0, s.size());
-    result->expand()->print();
-    std::cout << std::endl;
-    result->conj()->expand()->print();
-    return 0;
 }

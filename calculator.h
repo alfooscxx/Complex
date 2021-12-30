@@ -57,7 +57,7 @@ namespace calc
         virtual expressionNode *expand() = 0;
 
         // printing data, utility predicates
-        virtual const bool zeroEqualityCheck() const = 0; // TODO: add optional printing // TODO: make pure virtual
+        virtual const bool checkZeroEquality() const = 0; // TODO: add optional printing // TODO: make pure virtual
 
         virtual void print() const = 0;
         virtual const bool requiresBracketsPrinting() const = 0;
@@ -122,7 +122,7 @@ namespace calc
 
         virtual expressionNode *expand() override;
 
-        virtual const bool zeroEqualityCheck() const { return false; } // FIXME
+        virtual const bool checkZeroEquality() const { return false; } // FIXME
 
         virtual void print() const override;
         virtual const bool requiresBracketsPrinting() const;
@@ -185,33 +185,30 @@ namespace calc
         {
             coef = _coef;
         }
-        std::multimap<std::string, term *> product;
+
+        std::map<std::string, std::pair<term *, int>> product;
+
         monomial() {}
         monomial(constTy _coef, term *_term)
             : coef(_coef)
         {
-            product.insert({_term->name, _term});
+            product.insert({_term->name + (_term->hasConjugationMark ? "$" : ""), {_term, 1}});
         }
-        monomial(const constTy _coef, std::multimap<std::string, term *> _product)
+        monomial(const constTy _coef, const std::map<std::string, std::pair<term *, int>> &_product)
             : coef(_coef), product(_product)
         {
         }
 
-        bool operator<(const monomial &other) const
-        {
-            return std::lexicographical_compare(product.begin(), product.end(), other.product.begin(), other.product.end(), [](auto a, auto b)
-                                                { return a.first < b.first; });
-        }
-        bool operator==(const monomial &other) const
-        {
-            return std::equal(product.begin(), product.end(), other.product.begin(), other.product.end(), [](auto a, auto b)
-                              { return a.first == b.first; });
-        }
+        const bool operator<(const monomial &other) const;
+
+        const bool operator==(const monomial &other) const;
 
         expressionNode *conj() const;
-
         monomial operator*(const monomial &other) const;
         void operator*=(const constTy k) const;
+
+        const bool dividedBy(const monomial &divider) const;
+        monomial divide(const monomial &divider) const;
     };
 
     class polyNode : public expressionNode
@@ -294,11 +291,15 @@ namespace calc
         virtual void print() const;
 
     private:
-        std::set<monomial> sum = std::set<monomial>();
+        std::set<monomial> sum;
 
     public:
+        const bool dividedBy(const monomial &divider) const;
+
+        expressionNode *divide(const monomial &divider) const;
+
         virtual const bool requiresBracketsPrinting() const { return sum.size() > 1; }
-        const bool zeroEqualityCheck() const { return sum.empty(); }
+        const bool checkZeroEquality() const { return sum.empty(); }
     };
 
     polyNode *make_term(std::string name);
